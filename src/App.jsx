@@ -6,6 +6,7 @@ import { getDatabase, ref, set, onValue, update, get, child } from "firebase/dat
 // ============================================================================
 // 🔴 COLE SUAS CHAVES DO FIREBASE AQUI
 // ============================================================================
+
 const firebaseConfig = {
   apiKey: "AIzaSyAN6oV7_cXKJQTn1BOm3WX_bmhzS1GNDlM",
   authDomain: "ontheblastgame.firebaseapp.com",
@@ -69,12 +70,13 @@ const BlockBlastGame = () => {
   const [chatInput, setChatInput] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // CORES DE FUNDO (GRADIENTES VIBRANTES)
+  // Lista de Gradientes (Fundo Colorido)
   const backgrounds = [
-    'from-indigo-500 via-purple-500 to-pink-500', // Roxo Padrão
-    'from-blue-500 via-teal-400 to-emerald-400',   // Azul/Verde
-    'from-orange-500 via-red-500 to-pink-500',     // Laranja/Rosa
-    'from-green-400 via-cyan-500 to-blue-500'      // Verde/Azul
+    'from-purple-600 via-pink-500 to-orange-400',
+    'from-blue-600 via-cyan-500 to-teal-400',
+    'from-red-600 via-orange-500 to-yellow-400',
+    'from-green-600 via-emerald-500 to-lime-400',
+    'from-indigo-600 via-purple-500 to-pink-400'
   ];
 
   // Auto-join via Link
@@ -136,8 +138,16 @@ const BlockBlastGame = () => {
         const c = generateRoomCode();
         setRoomCode(c);
         setIsHost(true);
+        // ATENÇÃO: Aqui estava o erro. Adicionei setGameMode('online') e iniciei o hostGrid corretamente
+        setGameMode('online'); 
+        
         await set(ref(db, `rooms/${c}`), {
-            host: playerName, hostScore: 0, hostGrid: "[]", guest: null, createdAt: Date.now()
+            host: playerName, 
+            hostScore: 0, 
+            // Inicia com grid vazio real, não string vazia
+            hostGrid: JSON.stringify(Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null))), 
+            guest: null, 
+            createdAt: Date.now()
         });
         setScreen('waitingRoom');
     } catch (error) { alert("Erro ao criar sala: " + error.message); }
@@ -157,8 +167,15 @@ const BlockBlastGame = () => {
         
         setRoomCode(code);
         setIsHost(false);
+        // CORREÇÃO: Define o modo online para o visitante ver a tela dividida
+        setGameMode('online');
         setConnectedPlayer(data.host);
-        await update(roomRef, { guest: playerName, guestScore: 0, guestGrid: JSON.stringify(Array(GRID_SIZE).fill(Array(GRID_SIZE).fill(null))) });
+        
+        await update(roomRef, { 
+            guest: playerName, 
+            guestScore: 0, 
+            guestGrid: JSON.stringify(Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null))) 
+        });
         setScreen('game');
     } catch (error) { alert("Erro ao entrar: " + error.message); }
   };
@@ -178,17 +195,26 @@ const BlockBlastGame = () => {
       const data = snapshot.val();
       if (!data) return;
       if (data.chat) setChatMessages(Object.values(data.chat));
+      
       if (isHost) {
-        if (data.guest && !connectedPlayer) { setConnectedPlayer(data.guest); setScreen('game'); }
+        if (data.guest && !connectedPlayer) { 
+            setConnectedPlayer(data.guest); 
+            setGameMode('online'); // Garante modo online quando guest entra
+            setScreen('game'); 
+        }
         setOpponentScore(data.guestScore || 0);
-        if (data.guestGrid) setOpponentGrid(JSON.parse(data.guestGrid));
+        if (data.guestGrid) {
+            try { setOpponentGrid(JSON.parse(data.guestGrid)); } catch(e) {}
+        }
       } else {
         setOpponentScore(data.hostScore || 0);
-        if (data.hostGrid) setOpponentGrid(JSON.parse(data.hostGrid));
+        if (data.hostGrid) {
+            try { setOpponentGrid(JSON.parse(data.hostGrid)); } catch(e) {}
+        }
       }
     });
     return () => unsubscribe();
-  }, [roomCode, isHost, screen]);
+  }, [roomCode, isHost, screen, connectedPlayer]);
 
   useEffect(() => {
     if (gameMode !== 'online' || !roomCode || screen !== 'game' || !db) return;
@@ -223,7 +249,7 @@ const BlockBlastGame = () => {
     setScore(0); setCombo(0); setGameOver(false);
     setPieces(generatePieces());
     
-    // IMPORTANTE: Garante o fundo colorido no início
+    // Zera o índice do fundo ao começar
     setBackgroundIndex(0);
     
     if(mode==='local') setScreen('game');
@@ -338,20 +364,24 @@ const BlockBlastGame = () => {
                     <p className="text-5xl font-mono font-black text-purple-600 tracking-widest">{roomCode}</p>
                 </div>
                 
-                {/* BOTÃO DE LINK PRESENTE AQUI */}
+                {/* BOTÃO DE LINK PRESENTE */}
                 <button onClick={copyInviteLink} className="w-full mb-6 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg hover:scale-105">
                     {copiedLink ? <Check size={20} /> : <LinkIcon size={20} />} 
                     {copiedLink ? 'Link Copiado!' : 'Copiar Link para Convidar'}
                 </button>
                 
-                <div className="animate-pulse text-purple-600 font-bold mb-6 flex justify-center items-center gap-2"><div className="w-2 h-2 bg-purple-600 rounded-full animate-bounce"></div> Aguardando oponente...</div>
+                <div className="animate-pulse text-purple-600 font-bold mb-6 flex justify-center items-center gap-2">
+                    <div className="w-2 h-2 bg-purple-600 rounded-full animate-bounce"></div> 
+                    Aguardando oponente...
+                </div>
+
                 <button onClick={() => { setScreen('menu'); setRoomCode(''); }} className="text-red-500 font-bold hover:underline">Cancelar</button>
             </div>
         </div>
     );
   }
 
-  // TELA DO JOGO (COM FUNDO COLORIDO EM TODOS OS MODOS)
+  // TELA DO JOGO (COM MODO ONLINE CORRIGIDO)
   return (
     <div className={`min-h-screen bg-gradient-to-br ${backgrounds[backgroundIndex]} p-2 transition-all duration-1000 flex flex-col items-center justify-center`}>
       <div className="max-w-6xl w-full">
@@ -395,7 +425,7 @@ const BlockBlastGame = () => {
                     </div>
                 </div>
 
-                {/* Peças */}
+                {/* Peças - FUNDO BRANCO LEVE PARA DESTACAR DO COLORIDO */}
                 <div className="mt-6 flex gap-4 justify-center items-center min-h-[120px] w-full bg-white/30 rounded-xl p-2 shadow-inner">
                     {pieces.length === 0 && <p className="text-white font-bold animate-pulse">Gerando peças...</p>}
                     {pieces.map(p=><div key={p.id} onClick={()=>setSelectedPiece(selectedPiece?.id===p.id?null:p)} className={`bg-white p-3 rounded-xl cursor-pointer transition-all shadow-lg ${selectedPiece?.id===p.id?'scale-110 ring-4 ring-purple-500':''}`}><div style={{display:'grid',gridTemplateColumns:`repeat(${p.shape[0].length},20px)`,gap:'2px'}}>{p.shape.map((rw,i)=>rw.map((c,j)=><div key={`${i}-${j}`} className="rounded-sm" style={{width:20,height:20,backgroundColor:c?p.color:'transparent'}}/>))}</div></div>)}
