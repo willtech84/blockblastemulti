@@ -4,18 +4,17 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue, update, get, child, remove } from "firebase/database";
 
 // ============================================================================
-// 🔴 CONFIGURAÇÃO DO FIREBASE (Coloque suas chaves aqui)
+// 🔴 CONFIGURAÇÃO DO FIREBASE
 // ============================================================================
 const firebaseConfig = {
   apiKey: "AIzaSyAN6oV7_cXKJQTn1BOm3WX_bmhzS1GNDlM",
   authDomain: "ontheblastgame.firebaseapp.com",
   databaseURL: "https://ontheblastgame-default-rtdb.firebaseio.com",
   projectId: "ontheblastgame",
-  storageBucket:  "ontheblastgame.firebasestorage.app",
+  storageBucket: "ontheblastgame.firebasestorage.app",
   messagingSenderId: "996058726356",
-  appId: "1:996058726356:web:b50500f2347eecd9d4a041"
+  appId: "1:996058726356:web:b50500f2347eecd9d4a041",
 };
-
 
 let db;
 try {
@@ -32,6 +31,7 @@ const GRID_SIZE = 8;
 const CELL_SIZE = 40;
 const MAX_PLAYERS = 3;
 
+// Cores Neon Vibrantes
 const COLORS = [
   '#FF0055', '#00FF99', '#00CCFF', '#FFAA00', '#CC00FF', '#FFFF00'
 ];
@@ -73,43 +73,198 @@ const BlockBlastGame = () => {
   const [chatInput, setChatInput] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
   
-  // Áudio Ref
+  // Refs
   const inactivityTimer = useRef(null);
   const audioContextRef = useRef(null);
+  // Refs para Drag Logic (Para evitar closures antigos nos event listeners)
+  const draggingPieceRef = useRef(null);
+  const gridRef = useRef(grid);
 
-  // Inicialização Audio e Listeners
+  // Atualiza ref do grid sempre que mudar (para o drop saber onde pode soltar)
+  useEffect(() => { gridRef.current = grid; }, [grid]);
+
+  // Inicialização Audio
   useEffect(() => {
     window.AudioContext = window.AudioContext || window.webkitAudioContext;
     audioContextRef.current = new window.AudioContext();
     resetInactivityTimer();
     
-    window.addEventListener('mousemove', handleGlobalMouseMove);
-    window.addEventListener('touchmove', handleGlobalTouchMove, { passive: false });
-    window.addEventListener('mouseup', handleGlobalMouseUp);
-    window.addEventListener('touchend', handleGlobalMouseUp);
-    window.addEventListener('keydown', resetInactivityTimer);
-    window.addEventListener('click', resetInactivityTimer);
+    // Listeners Globais para detectar inatividade
+    const reset = () => resetInactivityTimer();
+    window.addEventListener('keydown', reset);
+    window.addEventListener('click', reset);
+    window.addEventListener('touchstart', reset);
 
     return () => {
       clearTimeout(inactivityTimer.current);
-      window.removeEventListener('mousemove', handleGlobalMouseMove);
-      window.removeEventListener('touchmove', handleGlobalTouchMove);
-      window.removeEventListener('mouseup', handleGlobalMouseUp);
-      window.removeEventListener('touchend', handleGlobalMouseUp);
-      window.removeEventListener('keydown', resetInactivityTimer);
-      window.removeEventListener('click', resetInactivityTimer);
+      window.removeEventListener('keydown', reset);
+      window.removeEventListener('click', reset);
+      window.removeEventListener('touchstart', reset);
     };
-  }, [draggingPiece, grid]); 
+  }, []);
 
-  // --- GARANTIA DE PEÇAS (CORREÇÃO ONLINE) ---
+  // Garantia de Peças
   useEffect(() => {
     if (screen === 'game' && !gameOver && pieces.length === 0) {
-        // Se estiver no jogo e sem peças, gera imediatamente
         setPieces(generatePieces());
     }
   }, [screen, pieces, gameOver]);
 
-  // --- ÁUDIO ---
+  // --- LÓGICA DE ARRASTAR CORRIGIDA (EVENTOS DIRETOS) ---
+  
+  const onDragStart = (e, piece) => {
+    // Previne comportamento padrão (scroll)
+    if (e.cancelable && e.type === 'touchstart') e.preventDefault();
+    
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    // Atualiza Estado e Ref
+    setDraggingPiece(piece);
+    draggingPieceRef.current = piece;
+    setDragPos({ x: clientX, y: clientY });
+
+    // Adiciona Listeners na Janela (Global)
+    window.addEventListener('mousemove', onDragMove);
+    window.addEventListener('touchmove', onDragMove, { passive: false });
+    window.addEventListener('mouseup', onDragEnd);
+    window.addEventListener('touchend', onDragEnd);
+  };
+
+  const onDragMove = (e) => {
+    if (!draggingPieceRef.current) return;
+    
+    // Previne scroll durante o arrasto
+    if(e.cancelable) e.preventDefault();
+
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    setDragPos({ x: clientX, y: clientY });
+    
+    // Detecção de Hover (Onde vai cair)
+    const elements = document.elementsFromPoint(clientX, clientY);
+    const cellEl = elements.find(el => el.getAttribute('data-row'));
+    
+    if (cellEl) {
+      setHoverCell({ 
+          r: parseInt(cellEl.getAttribute('data-row')), 
+          c: parseInt(cellEl.getAttribute('data-col')) 
+      });
+    } else {
+      setHoverCell(null);
+    }
+  };
+
+  const onDragEnd = (e) => {
+    // Remove listeners
+    window.removeEventListener('mousemove', onDragMove);
+    window.removeEventListener('touchmove', onDragMove);
+    window.removeEventListener('mouseup', onDragEnd);
+    window.removeEventListener('touchend', onDragEnd);
+
+    // Tenta soltar a peça
+    // Usamos refs aqui para garantir estado atualizado dentro do listener
+    if (draggingPieceRef.current) {
+        // Logica de soltar baseada no hoverCell atual (precisamos pegar do estado ou recalcular)
+        // Como o setHoverCell é assíncrono, recalculamos rapidinho baseada na ultima posição
+        const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+        const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+        
+        const elements = document.elementsFromPoint(clientX, clientY);
+        const cellEl = elements.find(el => el.getAttribute('data-row'));
+        
+        if (cellEl) {
+            const r = parseInt(cellEl.getAttribute('data-row'));
+            const c = parseInt(cellEl.getAttribute('data-col'));
+            attemptPlacePiece(draggingPieceRef.current, r, c);
+        }
+    }
+
+    setDraggingPiece(null);
+    draggingPieceRef.current = null;
+    setHoverCell(null);
+  };
+
+  const attemptPlacePiece = (piece, r, c) => {
+      // Usa gridRef.current para ter certeza que é o grid atual
+      if (canPlacePiece(piece, r, c, gridRef.current)) {
+          placePiece(piece, r, c);
+      }
+  };
+
+  // --- LÓGICA DO JOGO ---
+  
+  const canPlacePiece = (piece, row, col, currentGrid = grid) => {
+    if (!piece) return false;
+    const offsetR = Math.floor(piece.shape.length / 2);
+    const offsetC = Math.floor(piece.shape[0].length / 2);
+    const startR = row - offsetR;
+    const startC = col - offsetC;
+
+    for (let r = 0; r < piece.shape.length; r++) {
+      for (let c = 0; c < piece.shape[r].length; c++) {
+        if (piece.shape[r][c]) {
+          const nr = startR + r;
+          const nc = startC + c;
+          if (nr < 0 || nr >= GRID_SIZE || nc < 0 || nc >= GRID_SIZE) return false;
+          if (currentGrid[nr][nc]) return false;
+        }
+      }
+    }
+    return { startR, startC };
+  };
+
+  const placePiece = (piece, row, col) => {
+    const check = canPlacePiece(piece, row, col, grid);
+    if (!check) return;
+    const { startR, startC } = check;
+
+    const newGrid = grid.map(r => [...r]);
+    piece.shape.forEach((rowArr, r) => {
+      rowArr.forEach((val, c) => {
+        if (val) newGrid[startR + r][startC + c] = piece.color;
+      });
+    });
+
+    // Remove peça da mão
+    const remainingPieces = pieces.filter(p => p.id !== piece.id);
+    
+    // Check Linhas
+    let lines = 0;
+    const clearedGrid = newGrid.map(r => [...r]);
+    for(let i=0; i<GRID_SIZE; i++) {
+        if(clearedGrid[i].every(c=>c)) { clearedGrid[i].fill(null); lines++; }
+        if(clearedGrid.every(r=>r[i])) { for(let r=0; r<GRID_SIZE; r++) clearedGrid[r][i]=null; lines++; }
+    }
+
+    setGrid(clearedGrid);
+    
+    if (lines > 0) {
+        playSound('clear');
+        const newCombo = combo + 1;
+        setCombo(newCombo);
+        if(newCombo === 2) speak("Bom!");
+        if(newCombo >= 3) speak("Incrível!");
+        
+        const points = lines * 100 * newCombo;
+        const newScore = score + points;
+        setScore(newScore);
+
+        if (newScore >= lastBonusScore + 2000) {
+            setBombs(b => b + 1);
+            setLastBonusScore(s => s + 2000);
+            speak("Bomba!");
+        }
+    } else {
+        setCombo(0);
+    }
+
+    if (remainingPieces.length === 0) setPieces(generatePieces());
+    else setPieces(remainingPieces);
+  };
+
+  // --- AUDIO ---
   const resetInactivityTimer = () => {
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     if(audioContextRef.current && audioContextRef.current.suspenseOsc) {
@@ -163,11 +318,9 @@ const BlockBlastGame = () => {
         osc.start();
         ctx.suspenseOsc = osc;
         break;
-      default: break;
     }
   };
 
-  // --- LÓGICA DO JOGO ---
   const generatePieces = () => {
     const lvl = Math.min(5, Math.floor(score / 1000) + 1);
     const avail = PIECES_BY_LEVEL[lvl] || PIECES_BY_LEVEL[1];
@@ -224,130 +377,14 @@ const BlockBlastGame = () => {
     }
   };
 
-  // --- DRAG AND DROP SEGURO ---
-  const handleDragStart = (e, piece) => {
-    if(e.type === 'touchstart') document.body.style.overflow = 'hidden';
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    setDraggingPiece(piece);
-    setDragPos({ x: clientX, y: clientY });
-  };
-
-  function handleGlobalMouseMove(e) {
-    if (!draggingPiece) return;
-    setDragPos({ x: e.clientX, y: e.clientY });
-    checkHover(e.clientX, e.clientY);
-  }
-
-  function handleGlobalTouchMove(e) {
-    if (!draggingPiece) return;
-    e.preventDefault();
-    const touch = e.touches[0];
-    setDragPos({ x: touch.clientX, y: touch.clientY });
-    checkHover(touch.clientX, touch.clientY);
-  }
-
-  function checkHover(x, y) {
-    const elements = document.elementsFromPoint(x, y);
-    const cellEl = elements.find(el => el.getAttribute('data-row'));
-    if (cellEl) {
-      setHoverCell({ 
-          r: parseInt(cellEl.getAttribute('data-row')), 
-          c: parseInt(cellEl.getAttribute('data-col')) 
-      });
-    } else {
-      setHoverCell(null);
-    }
-  }
-
-  function handleGlobalMouseUp() {
-    document.body.style.overflow = 'auto';
-    if (draggingPiece && hoverCell) {
-        placePiece(draggingPiece, hoverCell.r, hoverCell.c);
-    }
-    setDraggingPiece(null);
-    setHoverCell(null);
-  }
-
-  // --- LÓGICA DE COLOCAÇÃO BLINDADA ---
-  const canPlacePiece = (piece, row, col) => {
-    // Verificações de segurança anti-crash
-    if (!piece || row === null || col === null) return false;
-    
-    const offsetR = Math.floor(piece.shape.length / 2);
-    const offsetC = Math.floor(piece.shape[0].length / 2);
-    const startR = row - offsetR;
-    const startC = col - offsetC;
-
-    for (let r = 0; r < piece.shape.length; r++) {
-      for (let c = 0; c < piece.shape[r].length; c++) {
-        if (piece.shape[r][c]) {
-          const nr = startR + r;
-          const nc = startC + c;
-          // Verificação estrita de limites
-          if (nr < 0 || nr >= GRID_SIZE || nc < 0 || nc >= GRID_SIZE) return false;
-          if (grid[nr] && grid[nr][nc]) return false;
-        }
-      }
-    }
-    return { startR, startC };
-  };
-
-  const placePiece = (piece, row, col) => {
-    const placement = canPlacePiece(piece, row, col);
-    if (!placement) return; // Segurança extra
-
-    const { startR, startC } = placement;
-    const newGrid = grid.map(r => [...r]);
-    
-    piece.shape.forEach((rowArr, r) => {
-      rowArr.forEach((val, c) => {
-        if (val) newGrid[startR + r][startC + c] = piece.color;
-      });
-    });
-
-    const remainingPieces = pieces.filter(p => p.id !== piece.id);
-    let lines = 0;
-    const clearedGrid = newGrid.map(r => [...r]);
-    
-    for(let i=0; i<GRID_SIZE; i++) {
-        if(clearedGrid[i].every(c=>c)) { clearedGrid[i].fill(null); lines++; }
-        if(clearedGrid.every(r=>r[i])) { for(let r=0; r<GRID_SIZE; r++) clearedGrid[r][i]=null; lines++; }
-    }
-
-    setGrid(clearedGrid);
-    if (lines > 0) {
-        playSound('clear');
-        const newCombo = combo + 1;
-        setCombo(newCombo);
-        if(newCombo === 2) speak("Bom!");
-        if(newCombo >= 3) speak("Incrível!");
-        setScore(score + (lines * 100 * newCombo));
-
-        if (score + (lines*100*newCombo) >= lastBonusScore + 2000) {
-            setBombs(b => b + 1);
-            setLastBonusScore(s => s + 2000);
-            speak("Bomba!");
-        }
-    } else {
-        setCombo(0);
-    }
-
-    if (remainingPieces.length === 0) setPieces(generatePieces());
-    else setPieces(remainingPieces);
-  };
-
-  // Game Over Checker
   useEffect(() => {
     if(screen !== 'game' || gameOver || pieces.length === 0) return;
-    
     const canMove = pieces.some(p => {
         for(let r=0; r<GRID_SIZE; r++) for(let c=0; c<GRID_SIZE; c++) {
-            if(canPlacePiece(p, r, c)) return true;
+            if(canPlacePiece(p, r, c, grid)) return true;
         }
         return false;
     });
-
     if(!canMove) {
         setGameOver(true);
         speak("Fim de jogo");
@@ -399,7 +436,6 @@ const BlockBlastGame = () => {
     setScreen('waitingRoom');
   };
 
-  // Sync Room
   useEffect(() => {
     if(!activeRoomCode || !db) return;
     const unsub = onValue(ref(db, `rooms/${activeRoomCode}`), (snap) => {
@@ -417,12 +453,16 @@ const BlockBlastGame = () => {
       setChatInput('');
   };
 
-  // --- RENDERIZADORES ---
+  // --- COMPONENTE VISUAL DA PEÇA ---
   const RenderPiece = ({ piece, isDragging }) => (
-    <div className={`grid gap-1 p-2 ${isDragging ? 'scale-110 opacity-90' : 'cursor-grab'}`}
-         style={{ gridTemplateColumns: `repeat(${piece.shape[0].length}, 20px)`, pointerEvents: isDragging ? 'none' : 'auto' }}
-         onMouseDown={(e) => handleDragStart(e, piece)}
-         onTouchStart={(e) => handleDragStart(e, piece)}
+    <div 
+        className={`grid gap-1 p-2 ${isDragging ? 'scale-110 opacity-90' : 'cursor-grab hover:scale-105'}`}
+        style={{ 
+            gridTemplateColumns: `repeat(${piece.shape[0].length}, 20px)`,
+            touchAction: 'none' // CRÍTICO: Previne scroll no mobile
+        }}
+        onMouseDown={(e) => onDragStart(e, piece)}
+        onTouchStart={(e) => onDragStart(e, piece)}
     >
         {piece.shape.map((row, i) => row.map((cell, j) => (
             <div key={`${i}-${j}`} 
@@ -439,7 +479,7 @@ const BlockBlastGame = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-white font-sans select-none overflow-hidden touch-none">
-        
+      
       {/* MENU */}
       {screen === 'menu' && (
         <div className="flex flex-col items-center justify-center h-screen p-4 space-y-6 animate-float">
@@ -476,10 +516,13 @@ const BlockBlastGame = () => {
                       </div>
                   ))}
               </div>
-              {/* BOTÃO LINK RESTAURADO */}
-              <button onClick={copyInviteLink} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-xl flex items-center gap-2">
-                  {copiedLink ? <Check/> : <LinkIcon/>} {copiedLink ? 'Copiado!' : 'Copiar Link'}
+              
+              {/* LINK DE COMPARTILHAR - RESTAURADO E VISÍVEL */}
+              <button onClick={copyInviteLink} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-xl flex items-center gap-2 transition-all">
+                  {copiedLink ? <Check size={20}/> : <LinkIcon size={20}/>} 
+                  {copiedLink ? 'Link Copiado!' : 'Copiar Link da Sala'}
               </button>
+
               <button onClick={() => setScreen('game')} className="bg-yellow-500 text-black px-8 py-4 rounded-xl font-black text-xl shadow-[0_4px_0_rgb(100,50,0)] hover:scale-105 transition">COMEÇAR</button>
           </div>
       )}
@@ -497,7 +540,7 @@ const BlockBlastGame = () => {
 
             <div className="flex flex-1 gap-4 overflow-hidden">
                 <div className="flex-1 flex flex-col items-center justify-center relative">
-                    {/* TABULEIRO COM PREVIEW BLINDADO */}
+                    {/* TABULEIRO */}
                     <div className="relative bg-slate-800 p-2 rounded-lg shadow-2xl border-4 border-slate-700" style={{ width: 'fit-content' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${GRID_SIZE}, ${CELL_SIZE}px)`, gap: '2px' }}>
                             {grid.map((row, r) => row.map((cell, c) => (
@@ -507,13 +550,15 @@ const BlockBlastGame = () => {
                                          backgroundColor: cell || '#1e293b',
                                          borderRadius: '4px',
                                          boxShadow: cell ? 'inset 3px 3px 2px rgba(255,255,255,0.3), 3px 3px 0px rgba(0,0,0,0.4)' : 'inset 1px 1px 4px rgba(0,0,0,0.5)',
-                                         // PREVIEW SEGURO
-                                         opacity: (!cell && draggingPiece && hoverCell && canPlacePiece(draggingPiece, hoverCell.r, hoverCell.c)) ? 
-                                            ((r >= (hoverCell.r - Math.floor(draggingPiece.shape.length/2)) && 
-                                              r < (hoverCell.r - Math.floor(draggingPiece.shape.length/2) + draggingPiece.shape.length) &&
-                                              c >= (hoverCell.c - Math.floor(draggingPiece.shape[0].length/2)) &&
-                                              c < (hoverCell.c - Math.floor(draggingPiece.shape[0].length/2) + draggingPiece.shape[0].length)) ? 0.5 : 1) 
-                                            : 1
+                                         // PREVIEW
+                                         backgroundColor: (draggingPiece && hoverCell && canPlacePiece(draggingPiece, hoverCell.r, hoverCell.c) && 
+                                            r >= (hoverCell.r - Math.floor(draggingPiece.shape.length/2)) && 
+                                            r < (hoverCell.r - Math.floor(draggingPiece.shape.length/2) + draggingPiece.shape.length) &&
+                                            c >= (hoverCell.c - Math.floor(draggingPiece.shape[0].length/2)) &&
+                                            c < (hoverCell.c - Math.floor(draggingPiece.shape[0].length/2) + draggingPiece.shape[0].length) &&
+                                            draggingPiece.shape[r - (hoverCell.r - Math.floor(draggingPiece.shape.length/2))][c - (hoverCell.c - Math.floor(draggingPiece.shape[0].length/2))])
+                                            ? 'rgba(255,255,255,0.2)' 
+                                            : (cell || '#1e293b')
                                      }}
                                 />
                             )))}
